@@ -14,15 +14,17 @@ question about the data, followed by a SQL query that answers it. The results
 appear inline as formatted blocks, making the document both the analysis and
 its report.
 
-This skill handles everything: patching `ob-sql` to support the DuckDB engine,
-structuring the org file, writing the queries, executing them from within Emacs,
-and saving the final notebook.
+This skill uses [ob-duckdb](https://github.com/gggion/ob-duckdb), which
+provides native DuckDB support for org-babel with persistent sessions, async
+execution, and multiple output formats. The session runs as a live DuckDB
+process in an Emacs buffer, so tables created in one block are immediately
+available in subsequent blocks.
 
 ## Prerequisites
 
-- **Emacs** with a running server (`M-x server-start`)
+- **Emacs 30.1+** with a running server (`M-x server-start`)
 - **DuckDB CLI** installed and on `$PATH` (`duckdb --version` to verify)
-- **org-babel** (ships with Emacs — `ob-sql` specifically)
+- **ob-duckdb** (installed automatically — see below)
 - The emacs-pair skill scripts at `~/.claude/skills/emacs-pair/scripts/`
 
 ## Step-by-step process
@@ -39,93 +41,63 @@ Pay attention to:
 - Timestamp formats and timezone info
 - Categorical columns (inspect distinct values later via queries)
 
-### 2. Add DuckDB engine support to ob-sql
+### 2. Install ob-duckdb in Emacs
 
-`ob-sql` does not natively support DuckDB. Inject support via Emacs Lisp
-advice. This must run before any SQL blocks are executed.
+Before creating the org file, ensure `ob-duckdb` is available. Evaluate this
+via `eval-elisp.sh`:
 
 ```elisp
-(require 'ob-sql)
-
-(defun org-babel-execute:sql--duckdb-support (orig-fn body params)
-  "Add DuckDB engine support to ob-sql."
-  (let ((engine (cdr (assq :engine params))))
-    (if (string= engine "duckdb")
-        (let* ((result-params (cdr (assq :result-params params)))
-               (cmdline (cdr (assq :cmdline params)))
-               (database (cdr (assq :database params)))
-               (colnames-p (not (equal "no" (cdr (assq :colnames params)))))
-               (in-file (org-babel-temp-file "sql-in-"))
-               (out-file (or (cdr (assq :out-file params))
-                             (org-babel-temp-file "sql-out-")))
-               (db-arg (if (and database (not (string-empty-p database)))
-                           (shell-quote-argument database)
-                         ""))
-               (command (format "duckdb %s -list -separator '\t' %s < %s > %s"
-                                db-arg
-                                (or cmdline "")
-                                (org-babel-process-file-name in-file)
-                                (org-babel-process-file-name out-file))))
-          (with-temp-file in-file
-            (insert (org-babel-expand-body:sql body params)))
-          (org-babel-eval command "")
-          (org-babel-result-cond result-params
-            (with-temp-buffer
-              (insert-file-contents-literally out-file)
-              (buffer-string))
-            (with-temp-buffer
-              (when colnames-p
-                (with-temp-buffer
-                  (insert-file-contents out-file)
-                  (goto-char (point-min))
-                  (forward-line 1)
-                  (insert "-\n")
-                  (write-file out-file)))
-              (org-table-import out-file '(16))
-              (org-babel-reassemble-table
-               (mapcar (lambda (x)
-                         (if (string= (car x) "-")
-                             'hline
-                           x))
-                       (org-table-to-lisp))
-               (org-babel-pick-name (cdr (assq :colname-names params))
-                                    (cdr (assq :colnames params)))
-               (org-babel-pick-name (cdr (assq :rowname-names params))
-                                    (cdr (assq :rownames params)))))))
-      (funcall orig-fn body params))))
-
-(advice-add 'org-babel-execute:sql :around #'org-babel-execute:sql--duckdb-support)
-
-(org-babel-do-load-languages
- 'org-babel-load-languages
- (cons '(sql . t) org-babel-load-languages))
+(unless (featurep 'ob-duckdb)
+  (if (fboundp 'straight-use-package)
+      (straight-use-package '(ob-duckdb :host github :repo "gggion/ob-duckdb"))
+    (progn
+      (require 'package)
+      (unless (assoc "melpa" package-archives)
+        (add-to-list 'package-archives '("melpa" . "https://melpa.org/packages/") t))
+      (package-refresh-contents)
+      (package-install 'ob-duckdb)))
+  (require 'ob-duckdb)
+  (org-babel-do-load-languages
+   'org-babel-load-languages
+   (append org-babel-load-languages '((duckdb . t)))))
 ```
-
-Evaluate this via `eval-elisp.sh` before opening the org file.
 
 ### 3. Structure the org file
 
-Use this skeleton:
+The org file should start with a title, an auto-install block for
+reproducibility, and a property line:
 
 ```org
 #+TITLE: <Descriptive Title>
-#+PROPERTY: header-args:sql :engine duckdb :database /tmp/<name>.duckdb :colnames yes :results output example
+#+begin_src emacs-lisp :results silent :exports none
+;;; Install ob-duckdb if not available
+(unless (featurep 'ob-duckdb)
+  (if (fboundp 'straight-use-package)
+      (straight-use-package '(ob-duckdb :host github :repo "gggion/ob-duckdb"))
+    (progn
+      (require 'package)
+      (unless (assoc "melpa" package-archives)
+        (add-to-list 'package-archives '("melpa" . "https://melpa.org/packages/") t))
+      (package-refresh-contents)
+      (package-install 'ob-duckdb)))
+  (require 'ob-duckdb)
+  (org-babel-do-load-languages
+   'org-babel-load-languages
+   (append org-babel-load-languages '((duckdb . t)))))
+#+end_src
+#+PROPERTY: header-args:duckdb :session <name> :db /tmp/<name>.duckdb :format markdown :results output example
 ```
 
-The file-level `#+PROPERTY` line sets defaults for every SQL block:
-- `:engine duckdb` — routes through the advice above
-- `:database /tmp/<name>.duckdb` — persistent file so tables created in one
-  block are available in subsequent blocks (acts as a shared session)
-- `:colnames yes` — includes column headers in output
-- `:results output example` — wraps output in `#+begin_example` blocks for
-  consistent formatting
+The auto-install block ensures anyone opening the notebook can execute it
+without manual setup — they just run the first block.
 
-To ensure short outputs also use `#+begin_example` (instead of the `: ` prefix),
-set this buffer-local variable before executing:
-
-```elisp
-(setq-local org-babel-min-lines-for-block-output 0)
-```
+The file-level `#+PROPERTY` line sets defaults for every `duckdb` block:
+- `:session <name>` — runs a persistent DuckDB process in an Emacs buffer
+  (`*DuckDB:<name>*`), so tables created in one block are available in all
+  subsequent blocks
+- `:db /tmp/<name>.duckdb` — persistent database file backing the session
+- `:format markdown` — markdown table output (can also use `box`, `csv`, `json`)
+- `:results output example` — wraps output in `#+begin_example` blocks
 
 ### 4. Write the notebook sections
 
@@ -136,7 +108,7 @@ Each section follows this pattern:
 
 <Brief motivation or context for the question — one or two sentences.>
 
-#+begin_src sql
+#+begin_src duckdb
 <SQL query that answers the question>
 #+end_src
 ```
@@ -146,7 +118,7 @@ Each section follows this pattern:
 ```org
 * Setup - Load data into DuckDB tables
 
-#+begin_src sql
+#+begin_src duckdb
 CREATE OR REPLACE TABLE my_table AS
 SELECT * FROM read_csv_auto('/absolute/path/to/data.csv');
 
@@ -178,8 +150,7 @@ From Elisp (via `eval-elisp.sh`), open the file, execute all blocks, and save:
 
 ```elisp
 (with-current-buffer (find-file-noselect "/path/to/notebook.org")
-  (org-set-regexps-and-options)  ;; parse file-level properties
-  (setq-local org-babel-min-lines-for-block-output 0)
+  (org-set-regexps-and-options)
   (let ((org-confirm-babel-evaluate nil))
     (org-babel-execute-buffer))
   (save-buffer))
@@ -195,6 +166,21 @@ To re-execute after changes, first remove stale results:
   (save-buffer))
 ```
 
+After execution, a `*DuckDB:<session-name>*` buffer will be available in Emacs
+for interactive ad-hoc queries.
+
+## ob-duckdb header arguments reference
+
+| Argument | Purpose |
+|----------|---------|
+| `:session NAME` | Persistent DuckDB process shared across blocks |
+| `:db FILE` | Database file (created if missing) |
+| `:format MODE` | Output format: `box`, `csv`, `json`, `markdown`, `table` |
+| `:async yes` | Non-blocking execution (requires `:session`) |
+| `:max-rows N` | Limit output to N rows |
+| `:output buffer` | Send results to a dedicated buffer instead of inline |
+| `:results table` | Convert markdown to org table (requires `:format markdown`) |
+
 ## DuckDB SQL tips for exploratory analysis
 
 - `read_csv_auto()` auto-detects delimiters, headers, and types
@@ -209,13 +195,11 @@ To re-execute after changes, first remove stale results:
 
 ## Gotchas
 
-- **DuckDB CLI flags**: use `-list -separator '\t'` for tab-separated output.
-  There is no `-tabs` flag despite what some docs suggest.
 - **Multiple result sets**: if a block has multiple SELECT statements, their
-  outputs concatenate and confuse the table parser. Use one SELECT per block.
+  outputs concatenate. Use one SELECT per block for clean output.
 - **Database file**: clean up `/tmp/<name>.duckdb` before a fresh run if you
   want to start from scratch (`rm -f /tmp/<name>.duckdb*`).
-- **ob-sql sessions**: `ob-sql` does not support `:session`. The shared database
-  file achieves the same effect — tables persist across blocks.
 - **File-level properties**: after modifying `#+PROPERTY`, call
   `(org-set-regexps-and-options)` to re-parse without reverting the buffer.
+- **Session buffer**: the `*DuckDB:<name>*` buffer stays open after execution.
+  The user can switch to it for interactive queries outside the notebook.
