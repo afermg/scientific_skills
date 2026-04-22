@@ -185,11 +185,54 @@ After saving, restore the `# /// script` header and `App(width="medium")`
 — `generate_filecontents` strips both. Also ensure no cell has an empty
 name (`""`) — replace with `"_"` to avoid `_unparsable_cell` errors.
 
+## Cell output rendering — last expression only
+
+marimo captures **the last top-level expression** of a cell as output.
+Statements (`if/else`, `for`, `while`, `with`, `try`) are not expressions,
+so `mo.vstack([...])` placed inside an `if` branch is evaluated and
+discarded — the cell renders nothing.
+
+```python
+# WRONG — nothing renders
+if ok:
+    mo.vstack([mo.md("### Result"), table])
+else:
+    mo.md("*no data*")
+
+# RIGHT — assign to a variable, then evaluate it as the last expression
+if ok:
+    _out = mo.vstack([mo.md("### Result"), table])
+else:
+    _out = mo.md("*no data*")
+_out
+```
+
+For plotly widgets specifically, `mo.output.replace(chart)` also works
+and avoids stale output issues.
+
 ## Known gotchas
 
 - **Bare widget expressions trigger ruff B018.** Marimo renders the last
   expression in a cell, so `dataset_dropdown` on a bare line is
   intentional. Add `# noqa: B018` to suppress the lint warning.
+- **`if/else` as a cell's last top-level construct renders nothing.** See
+  the rendering section above — assign to `_out` and end with `_out`.
+- **Bool toggles default to `True` when the downstream UI depends on them.**
+  A `mo.ui.switch(value=False)` gating an `mo.stop()` hides the cell's
+  content until the user clicks — preview defaults to empty, which reads as
+  "broken". Default to `True` unless the gated step is genuinely expensive.
+- **`mo.image(src=...)` accepts bytes directly.** Raw PNG bytes from
+  `io.BytesIO` render inline via marimo's `./@file/...` URLs — no data URLs
+  or temp files needed.
+- **`ctx.cells` yields `NotebookCell` objects, not IDs.** Iterate as
+  `for cell in ctx.cells: cell.id, cell.code, cell.status, cell.errors`.
+  Index access `ctx.cells["TqIu"]` returns a view by id.
+- **`ctx.set_ui_value(element, value)` for reactive UI updates.** Works on
+  `mo.ui.switch`, slider, text — triggers downstream cells to re-run.
+  Does NOT work on `mo.ui.dropdown`; construct with `value=...` instead.
+- **`code_mode` context lacks `get_graph()`.** Use `ctx.cells` to walk the
+  notebook and filter by `cell.code` substring to locate a specific cell,
+  then act via `cell.id`.
 - **`create_cell` produces empty names.** Cells created via
   `ctx.create_cell()` get `name=""` instead of `"_"`. Fix names before
   saving with `generate_filecontents` or codegen will produce
