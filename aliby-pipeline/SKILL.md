@@ -3,89 +3,108 @@ name: aliby-pipeline
 description: >
   Run the aliby image analysis pipeline with nahual cellpose/trackastra GPU
   servers. TRIGGER when: user asks to run extraction, segmentation, profiling,
-  or the timelapse/cellpainting/viability/cycle pipeline, mentions nahual
-  servers, or wants to start/stop/monitor pipeline runs. Also trigger on
-  "run nb01", "run pipelines", "start cellpose servers", "start trackastra".
+  or any of the timelapse/cellpainting/viability/cycle pipelines, mentions
+  nahual servers, or wants to start/stop/monitor pipeline runs. Also trigger
+  on "run nb01", "run pipelines", "start cellpose servers", "start trackastra".
 ---
 
 # Aliby Pipeline Runner
 
-Run the GSK/Broad image analysis pipeline (nb01_extract_profiles) with nahual
-cellpose and trackastra GPU servers for segmentation and tracking.
+Run the aliby image analysis pipeline (`notebooks/nb01_extract_profiles.py`)
+with nahual cellpose and trackastra GPU servers for segmentation and tracking.
 
 ## Architecture overview
 
-The pipeline has three components:
+Three components:
 
-1. **Nahual cellpose servers** -- standalone GPU processes that do cell/nuclei
+1. **Nahual cellpose servers** -- standalone GPU processes doing cell/nuclei
    segmentation via IPC sockets (`ipc:///tmp/cellpose{N}.ipc`)
 2. **Nahual trackastra server** -- standalone GPU process for cell tracking
    via IPC socket (`ipc:///tmp/trackastra.ipc`)
-3. **Pipeline workers** -- joblib parallel workers that read images, send them
-   to nahual servers for segmentation/tracking, then extract morphological
-   features
+3. **Pipeline workers** -- joblib parallel workers that read images, send
+   them to nahual servers for segmentation/tracking, then extract
+   morphological features with cp_measure
 
-The servers live in separate nix flakes at `/home/amunoz/projects/nahual_models/`.
+Pipeline entry point: `notebooks/nb01_extract_profiles.py` (marimo notebook).
+The `run_pipelines()` function is importable for scripted runs.
+
+## Notebook layout
+
+| Notebook | Purpose |
+|----------|---------|
+| nb01_extract_profiles | Segmentation + feature extraction (this skill) |
+| nb02_segmentation_audit | Review segmentation quality |
+| nb03_tracking_quality | Review trackastra tracks |
+| nb04_aggregate_profiles | Aggregate single-cell → well/site |
+| nb05_phenotypic_scoring | Cross-batch phenotypic scoring |
+| nb06_umap_explorer | UMAP visualisation |
+| nb07_normalization | Per-batch normalization |
+| nb09_cross_batch_normalization | Cross-batch normalization |
+| nb10_feature_importance | Feature importance analysis |
+| nb11_assay_concordance | Inter-assay concordance |
 
 ## Critical: CUDA stub library issue
 
 Nix environments include a stub `libcuda.so` from `cuda_cudart-*-stubs` that
 shadows the real NVIDIA driver at `/run/opengl-driver/lib/libcuda.so`. This
-causes `Error 34: CUDA driver is a stub library` and makes PyTorch fall back
-to CPU.
+causes `Error 34: CUDA driver is a stub library` and forces CPU fallback.
 
-**Fix**: Always prepend `/run/opengl-driver/lib` to `LD_LIBRARY_PATH`:
+**Fix**: prepend `/run/opengl-driver/lib` to `LD_LIBRARY_PATH`:
 
 ```bash
 export LD_LIBRARY_PATH=/run/opengl-driver/lib:$LD_LIBRARY_PATH
 ```
 
-This is already fixed in this project's `flake.nix` but the nahual model
-flakes (`cellpose/`, `trackastra/`) still have the bug. Pass the env var
-explicitly when launching their servers.
+Already fixed in this project's `flake.nix`. Pass it explicitly when
+launching nahual servers via `nix run`.
 
-## Starting nahual servers
+## Starting nahual servers with `nix run`
+
+Both `nahual_models/cellpose` and `nahual_models/trackastra` flakes expose
+`apps.default` that runs `server.py` with a socket argument. Prefer
+`nix run github:afermg/...` so there are no local checkouts to maintain.
 
 ### Cellpose servers
 
-Each server loads CellposeSAM (~4 GB VRAM). With 2x RTX A6000 (49 GB each),
-run up to 6 servers per GPU (12 total). Use `screen` + `nix develop`:
+Each server loads CellposeSAM (~4 GB VRAM). On 2× RTX A6000 (49 GB each),
+run up to 6 servers per GPU (12 total). Launch each in a `screen` session:
 
 ```bash
 # 6 servers on GPU 0
 for i in $(seq 0 5); do
-  screen -dmS cellpose$i bash -c "cd /home/amunoz/projects/nahual_models/cellpose && \
-    nix develop . --command bash -c \
-    'export LD_LIBRARY_PATH=/run/opengl-driver/lib:\$LD_LIBRARY_PATH && \
+  screen -dmS cellpose$i bash -c \
+    "export LD_LIBRARY_PATH=/run/opengl-driver/lib:\$LD_LIBRARY_PATH && \
      export CUDA_VISIBLE_DEVICES=0 && \
-     python server.py ipc:///tmp/cellpose$i.ipc'"
+     nix run github:afermg/nahual_cellpose -- ipc:///tmp/cellpose$i.ipc"
 done
 
 # 6 servers on GPU 1
 for i in $(seq 6 11); do
-  screen -dmS cellpose$i bash -c "cd /home/amunoz/projects/nahual_models/cellpose && \
-    nix develop . --command bash -c \
-    'export LD_LIBRARY_PATH=/run/opengl-driver/lib:\$LD_LIBRARY_PATH && \
+  screen -dmS cellpose$i bash -c \
+    "export LD_LIBRARY_PATH=/run/opengl-driver/lib:\$LD_LIBRARY_PATH && \
      export CUDA_VISIBLE_DEVICES=1 && \
-     python server.py ipc:///tmp/cellpose$i.ipc'"
+     nix run github:afermg/nahual_cellpose -- ipc:///tmp/cellpose$i.ipc"
 done
 ```
 
 ### Trackastra server
 
-Single instance is sufficient (tracking is fast):
+A single instance is enough (tracking is fast):
 
 ```bash
-screen -dmS trackastra bash -c "cd /home/amunoz/projects/nahual_models/trackastra && \
-  nix develop . --command bash -c \
-  'export LD_LIBRARY_PATH=/run/opengl-driver/lib:\$LD_LIBRARY_PATH && \
+screen -dmS trackastra bash -c \
+  "export LD_LIBRARY_PATH=/run/opengl-driver/lib:\$LD_LIBRARY_PATH && \
    export CUDA_VISIBLE_DEVICES=1 && \
-   python server.py ipc:///tmp/trackastra.ipc'"
+   nix run github:afermg/nahual_trackastra -- ipc:///tmp/trackastra.ipc"
 ```
+
+Replace flake URLs with whatever is canonical for your account/org. If the
+exact URL is unknown, fall back to `nix run /path/to/nahual_models/<name>`
+against a local checkout.
 
 ### Verifying servers
 
-Wait ~60-90 seconds for nix develop + model loading, then test:
+Wait ~60-90 seconds for build + model loading, then test:
 
 ```python
 from nahual.process import dispatch_setup_process
@@ -93,28 +112,28 @@ import numpy as np
 
 setup, process = dispatch_setup_process('cellpose')
 info = setup({}, address='ipc:///tmp/cellpose0.ipc')
-print('Setup:', info)  # Should show device: cuda:0
+print('Setup:', info)  # expect device: cuda:0
 
 img = np.random.randint(0, 255, (1, 128, 128), dtype=np.uint16)
 result = process(img, address='ipc:///tmp/cellpose0.ipc')
-print('Result shape:', result.shape)  # Should be (128, 128)
+print('Result shape:', result.shape)  # (128, 128)
 ```
 
-If setup returns `{}` (empty dict), the model failed to load -- check the
-screen session for errors (usually CUDA OOM from too many servers on one GPU).
+If setup returns `{}`, the model failed to load -- check the screen session
+for errors (usually CUDA OOM from too many servers on one GPU).
 
 ## Running the pipeline
 
 ```python
 from pathlib import Path
-from analysis.nb01_extract_profiles import run_pipelines
+from notebooks.nb01_extract_profiles import run_pipelines
 
 batches_and_assays = [
-    ('ELN201687', 'timelapse_vs'),
-    ('ELN374825', 'timelapse'),
+    ('<batch_id>', '<assay>'),
+    ...
 ]
-input_dir = '/datastore/alan/gsk/batches'
-profiles_path = Path('/datastore/alan/gsk/aliby_output/standard_output')
+input_dir = '<path to batches root>'
+profiles_path = Path('<path to profiles output root>')
 nahual_addresses = [f'ipc:///tmp/cellpose{i}.ipc' for i in range(12)]
 
 run_pipelines(
@@ -131,70 +150,63 @@ run_pipelines(
 ```
 
 Key parameters:
-- **ncores**: parallel site workers (joblib). 18 is good for 192-core machine
-- **extract_ncores**: cores for feature extraction within each site (192)
-- **nahual_addresses**: list of IPC addresses; assigned round-robin to sites
-- **overwrite**: False skips already-processed sites
+- **ncores**: parallel site workers (joblib). ~18 on a 192-core machine.
+- **extract_ncores**: cores for cp_measure feature extraction per site.
+- **nahual_addresses**: list of IPC addresses; assigned round-robin to sites.
+- **overwrite**: `False` skips already-processed sites.
+
+Available `(batch, assay)` pairs come from
+`notebooks/nb01_extract_profiles.get_batches_assays()` -- call it to discover
+the valid list for the current dataset instead of hard-coding.
+
+Timelapse assays include trackastra tracking as a global step (uses the
+trackastra server); non-timelapse assays don't need it.
 
 ### Without nahual (local cellpose)
 
-Pass `nahual_addresses=None` to use local CellposeSAM. This loads the model
-in-process (one per worker), so reduce ncores to avoid GPU OOM. Requires
+Pass `nahual_addresses=None` to use local CellposeSAM. The model is loaded
+in-process once per worker, so reduce `ncores` to avoid GPU OOM. Requires
 `LD_LIBRARY_PATH=/run/opengl-driver/lib:$LD_LIBRARY_PATH` in the environment.
 
-## Available batches and assays
+## Resource guidelines (192-core, 754 GB RAM, 2× RTX A6000)
 
-| Batch | Assay | Type |
-|-------|-------|------|
-| ELN201687 | timelapse_vs | Timelapse with viability stain (2 channels, trackastra) |
-| ELN201687 | cycle | Cell cycle |
-| ELN201687 | viability | Viability |
-| ELN201687 | cellpainting | Cell Painting (5 channels) |
-| ELN374825 | timelapse | Timelapse (1 channel, trackastra) |
-| ELN374825 | cycle | Cell cycle |
-| ELN374825 | viability | Viability |
-| ELN374825 | cellpainting | Cell Painting |
-
-Timelapse assays include trackastra tracking as a global step.
-
-## Resource guidelines (192-core, 754 GB RAM, 2x RTX A6000)
-
-| Config | CPU% | RAM | Notes |
-|--------|------|-----|-------|
+| Config | CPU | RAM | Notes |
+|--------|-----|-----|-------|
 | ncores=18, 12 cellpose servers | ~35-60% | ~270-400 GB | Recommended |
-| ncores=24, no nahual (local GPU) | ~50-90% | 400+ GB | Risk of OOM |
+| ncores=24, no nahual (local GPU) | ~50-90% | 400+ GB | OOM risk |
 | ncores=12, no nahual (local GPU) | ~35-55% | ~270 GB | Conservative |
 
-**RAM warning threshold**: >500 GB used (~66%). If exceeded with no swap, the
-OOM killer will terminate workers silently (no traceback, just
-`resource_tracker` leaked object warnings in the log).
+**RAM warning threshold**: >500 GB used (~66%). With no swap, the OOM killer
+will terminate workers silently (no traceback -- just `resource_tracker`
+leaked-object warnings at the end of the log).
 
 ## Monitoring
 
 ```bash
 # Resource usage
-top -bn1 | head -5 && free -h && nvidia-smi --query-gpu=utilization.gpu,memory.used,memory.total --format=csv
+top -bn1 | head -5 && free -h && \
+  nvidia-smi --query-gpu=utilization.gpu,memory.used,memory.total --format=csv
 
 # Pipeline progress
-grep -c "Saving" run_timelapse.log    # completed steps
-grep -c "Skipping" run_timelapse.log  # already-done sites
-grep -c "Exception" run_timelapse.log # failures
+grep -c "Saving"    <log>   # completed steps
+grep -c "Skipping"  <log>   # already-done sites
+grep -c "Exception" <log>   # failures
 
-# Check for the OOM pattern (no traceback, just this at the end):
-# resource_tracker: There appear to be N leaked semlock/folder objects
+# OOM-killer signature (no traceback, just at end):
+#   resource_tracker: There appear to be N leaked semlock/folder objects
 ```
 
 ## Stopping servers
 
 ```bash
-# Kill all screen sessions
+# Kill all screen sessions for nahual servers
 screen -ls | grep -E "cellpose|trackastra" | awk -F. '{print $1}' | \
   xargs -I{} screen -X -S {} quit
 
-# Kill any orphaned processes
+# Kill any orphaned server processes
 pkill -f "python server.py ipc://"
 
-# Clear leaked GPU memory (check first with nvidia-smi)
+# Clear leaked GPU memory (verify first with nvidia-smi)
 nvidia-smi --query-compute-apps=pid --format=csv,noheader | xargs kill
 ```
 
@@ -202,8 +214,9 @@ nvidia-smi --query-compute-apps=pid --format=csv,noheader | xargs kill
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| `unpack requires a buffer of 2 bytes` | Cellpose server returning `{}` instead of numpy | Server failed to process -- check screen for CUDA OOM, reload model |
-| `ConnectionRefused` on IPC sockets | Server not running or not ready | Start servers, wait 60-90s for model loading |
-| `CUDA driver is a stub library` | Wrong `libcuda.so` in `LD_LIBRARY_PATH` | Prepend `/run/opengl-driver/lib` |
-| Pipeline hangs, no log output | All workers blocked on failed servers | Kill pipeline, restart servers, rerun with `overwrite=False` |
-| Silent death, leaked semlock warnings | OOM killer | Reduce ncores or number of cellpose servers |
+| `unpack requires a buffer of 2 bytes` | Server returned `{}` instead of numpy | Server crashed processing -- check screen for CUDA OOM |
+| `ConnectionRefused` on IPC sockets | Server not up yet | Wait 60-90s after `nix run` for build + model load |
+| `CUDA driver is a stub library` | Wrong `libcuda.so` found first | Prepend `/run/opengl-driver/lib` to `LD_LIBRARY_PATH` |
+| Pipeline hangs silently | All workers blocked on dead server | Kill pipeline, restart servers, rerun with `overwrite=False` |
+| Silent death, leaked-semlock warnings | OOM killer | Reduce `ncores` or number of cellpose servers |
+| `ModuleNotFoundError: analysis` | Old path; notebooks moved to `notebooks/` | Import from `notebooks.nb01_extract_profiles` |
