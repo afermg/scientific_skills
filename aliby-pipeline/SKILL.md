@@ -153,6 +153,9 @@ Key parameters:
 - **ncores**: parallel site workers (joblib). ~18 on a 192-core machine.
 - **extract_ncores**: cores for cp_measure feature extraction per site.
 - **nahual_addresses**: list of IPC addresses; assigned round-robin to sites.
+  **Must match the number of running servers.** Listing addresses that have
+  no server behind them causes workers to block forever on `ConnectionRefused`
+  retries -- the pipeline hangs with no traceback until OOM or manual kill.
 - **overwrite**: `False` skips already-processed sites.
 
 Available `(batch, assay)` pairs come from
@@ -218,5 +221,6 @@ nvidia-smi --query-compute-apps=pid --format=csv,noheader | xargs kill
 | `ConnectionRefused` on IPC sockets | Server not up yet | Wait 60-90s after `nix run` for build + model load |
 | `CUDA driver is a stub library` | Wrong `libcuda.so` found first | Prepend `/run/opengl-driver/lib` to `LD_LIBRARY_PATH` |
 | Pipeline hangs silently | All workers blocked on dead server | Kill pipeline, restart servers, rerun with `overwrite=False` |
+| Pipeline hangs silently, some servers idle | `nahual_addresses` lists more sockets than running servers; workers stuck retrying `ConnectionRefused` on the missing ones | Trim `nahual_addresses` to match the running server count (e.g. `range(12)` not `range(24)`) |
 | Silent death, leaked-semlock warnings | OOM killer | Reduce `ncores` or number of cellpose servers |
 | `ModuleNotFoundError: analysis` | Old path; notebooks moved to `notebooks/` | Import from `notebooks.nb01_extract_profiles` |
