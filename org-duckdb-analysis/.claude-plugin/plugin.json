@@ -1,0 +1,9 @@
+{
+  "name": "org-duckdb-analysis",
+  "description": "Create Org Mode literate notebooks that use DuckDB SQL queries via org-babel to explore and analyze tabular data (CSV, Parquet) inside Emacs.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Alán F. Muñoz",
+    "email": "amunozgo@broadinstitute.org"
+  }
+}

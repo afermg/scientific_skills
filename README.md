@@ -12,14 +12,29 @@ A collection of Claude Code skills for reproducible scientific data analysis and
 
 ## Installation
 
-Add this repository as a skill source in your Claude Code configuration:
+Add the marketplace from GitHub, then install plugins:
 
-```bash
-claude mcp add-skill-source scientific_skills /path/to/scientific_skills
+```text
+/plugin marketplace add afermg/scientific_skills
+/plugin install aliby-pipeline@scientific-skills
+/plugin install compose-notebook@scientific-skills
+/plugin install org-duckdb-analysis@scientific-skills
 ```
 
-Or copy individual skill directories into `~/.claude/skills/`.
+Pin a ref with `afermg/scientific_skills@<branch|tag|sha>`, or pass a local path for development. Refresh with `/plugin marketplace update scientific-skills`.
+
+To pick up new versions automatically, enable auto-update: `/plugin` → **Marketplaces** → select **scientific-skills** → **Enable auto-update** (checked on startup, applies to all plugins from this marketplace).
+
+## Repo layout
+
+```
+.claude-plugin/marketplace.json      # marketplace manifest
+<plugin>/.claude-plugin/plugin.json  # per-plugin manifest
+<plugin>/skills/<plugin>/SKILL.md    # skill body + YAML frontmatter
+```
 
 ## Adding a new skill
 
-Each skill lives in its own directory with a `SKILL.md` file containing YAML frontmatter (`name`, `description`) and markdown instructions. See existing skills for the expected format.
+1. Create `<plugin>/.claude-plugin/plugin.json` with `name`, `description`, `version`.
+2. Put the skill at `<plugin>/skills/<plugin>/SKILL.md` (frontmatter: `name`, `description`).
+3. Register the plugin in `.claude-plugin/marketplace.json` under `plugins`.

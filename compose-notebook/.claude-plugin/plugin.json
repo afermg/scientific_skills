@@ -1,0 +1,9 @@
+{
+  "name": "compose-notebook",
+  "description": "Compose marimo notebooks from the aliby catalog to build microscopy image analysis pipelines (segmentation, feature extraction, deep learning embeddings).",
+  "version": "0.1.0",
+  "author": {
+    "name": "Alán F. Muñoz",
+    "email": "amunozgo@broadinstitute.org"
+  }
+}

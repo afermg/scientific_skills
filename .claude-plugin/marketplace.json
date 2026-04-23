@@ -1,0 +1,34 @@
+{
+  "name": "scientific-skills",
+  "owner": {
+    "name": "Alán F. Muñoz",
+    "email": "amunozgo@broadinstitute.org"
+  },
+  "metadata": {
+    "description": "Claude Code skills for reproducible scientific data analysis and notebook composition.",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "aliby-pipeline",
+      "source": "./aliby-pipeline",
+      "description": "Run the aliby image analysis pipeline with nahual cellpose/trackastra GPU servers for segmentation, tracking, and feature extraction.",
+      "category": "bioimaging",
+      "keywords": ["aliby", "nahual", "cellpose", "trackastra", "microscopy", "segmentation"]
+    },
+    {
+      "name": "compose-notebook",
+      "source": "./compose-notebook",
+      "description": "Compose marimo notebooks from the aliby catalog to build microscopy image analysis pipelines (segmentation, feature extraction, deep learning embeddings).",
+      "category": "bioimaging",
+      "keywords": ["marimo", "aliby", "microscopy", "cellpose", "embeddings", "notebook"]
+    },
+    {
+      "name": "org-duckdb-analysis",
+      "source": "./org-duckdb-analysis",
+      "description": "Create Org Mode literate notebooks that use DuckDB SQL queries via org-babel to explore and analyze tabular data (CSV, Parquet) inside Emacs.",
+      "category": "data-analysis",
+      "keywords": ["org-mode", "emacs", "duckdb", "sql", "org-babel", "parquet"]
+    }
+  ]
+}
